@@ -9,9 +9,10 @@ class TestConfig:
     """Configuration for a credential testing session."""
 
     target: str
-    protocol: str = "both"  # "ssh", "api", or "both"
+    protocol: str = "both"  # "ssh", "api", "webfig", "both", or "all"
     ssh_port: int = 22
     api_port: int = 8728
+    webfig_port: int = 80
     threads: int = 1
     slow_mode: bool = False
     min_delay: float = 1.0  # Minimum delay between attempts (seconds)
@@ -30,7 +31,7 @@ class TestConfig:
         """Validate configuration values."""
         if not self.target:
             raise ValueError("Target host is required")
-        if self.protocol not in ("ssh", "api", "both"):
+        if self.protocol not in ("ssh", "api", "webfig", "both", "all"):
             raise ValueError(f"Invalid protocol: {self.protocol}")
         if self.threads < 1 or self.threads > 50:
             raise ValueError("Threads must be between 1 and 50")
@@ -38,6 +39,8 @@ class TestConfig:
             raise ValueError("SSH port must be between 1 and 65535")
         if self.api_port < 1 or self.api_port > 65535:
             raise ValueError("API port must be between 1 and 65535")
+        if self.webfig_port < 1 or self.webfig_port > 65535:
+            raise ValueError("WebFig port must be between 1 and 65535")
         if self.timeout < 1:
             raise ValueError("Timeout must be at least 1 second")
         if self.min_delay < 0:

@@ -26,6 +26,7 @@ from .proxy_manager import ProxyManager
 from .rate_limiter import AdaptiveRateLimiter
 from .reporter import Reporter
 from .ssh_tester import SSHTester
+from .webfig_tester import WebfigTester
 from .wordlist import WordlistGenerator
 
 logger = logging.getLogger("mikrotik_tester")
@@ -48,6 +49,7 @@ def _test_single(
     config: TestConfig,
     ssh_tester: Optional[SSHTester],
     api_tester: Optional[ApiTester],
+    webfig_tester: Optional[WebfigTester],
     proxy_manager: Optional[ProxyManager],
     rate_limiter: AdaptiveRateLimiter,
     checkpoint: CheckpointManager,
@@ -56,14 +58,15 @@ def _test_single(
 ) -> List[Dict]:
     """Test a single credential pair against the specified protocol(s).
 
-    Returns list of found credential dicts (0, 1, or 2 entries for 'both').
+    Returns list of found credential dicts.
     """
     found = []
 
-    protocols = (
-        ["api", "ssh"] if protocol == "both"
-        else [protocol]
-    )
+    _PROTOCOL_MAP = {
+        "both": ["api", "ssh"],
+        "all": ["api", "ssh", "webfig"],
+    }
+    protocols = _PROTOCOL_MAP.get(protocol, [protocol])
 
     for proto in protocols:
         if shutdown_event.is_set():
@@ -89,10 +92,11 @@ def _test_single(
             if proxy:
                 proxy_display = proxy.display
                 try:
-                    dest_port = (
-                        config.api_port if proto == "api"
-                        else config.ssh_port
-                    )
+                    dest_port = {
+                        "api": config.api_port,
+                        "ssh": config.ssh_port,
+                        "webfig": config.webfig_port,
+                    }.get(proto, config.ssh_port)
                     proxy_sock = proxy_manager.create_socket(
                         proxy, config.target, dest_port, config.timeout
                     )
@@ -127,6 +131,14 @@ def _test_single(
                 success = result.success
                 error_type = result.error_type or ""
                 method = result.auth_method or "ssh"
+
+            elif proto == "webfig" and webfig_tester:
+                result = webfig_tester.test_credential(
+                    username, password, sock=proxy_sock,
+                )
+                success = result.success
+                error_type = result.error_type or ""
+                method = "webfig"
 
         except Exception as e:
             error_type = "exception"
@@ -229,16 +241,22 @@ def main():
     # Set up testers
     ssh_tester = None
     api_tester = None
+    webfig_tester = None
 
-    if config.protocol in ("ssh", "both"):
+    if config.protocol in ("ssh", "both", "all"):
         ssh_tester = SSHTester(
             config.target, config.ssh_port, config.timeout,
             key_file=config.key_file,
         )
 
-    if config.protocol in ("api", "both"):
+    if config.protocol in ("api", "both", "all"):
         api_tester = ApiTester(
             config.target, config.api_port, config.timeout,
+        )
+
+    if config.protocol in ("webfig", "all"):
+        webfig_tester = WebfigTester(
+            config.target, config.webfig_port, config.timeout,
         )
 
     # Read router config if requested (via --read-config USER PASS)
@@ -317,8 +335,9 @@ def main():
                 future = executor.submit(
                     _test_single,
                     i, username, password, config.protocol, config,
-                    ssh_tester, api_tester, proxy_manager,
-                    rate_limiter, checkpoint, reporter, attempt_logger,
+                    ssh_tester, api_tester, webfig_tester,
+                    proxy_manager, rate_limiter, checkpoint,
+                    reporter, attempt_logger,
                 )
                 futures[future] = i
 

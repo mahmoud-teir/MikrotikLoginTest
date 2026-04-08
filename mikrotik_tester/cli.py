@@ -48,13 +48,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Protocol selection
     parser.add_argument(
-        "--protocol", "-p", choices=["ssh", "api", "both"], default="both",
-        help="Protocol to test (default: both)",
+        "--protocol", "-p",
+        choices=["ssh", "api", "webfig", "both", "all"],
+        default="both",
+        help="Protocol to test: ssh, api, webfig, both (ssh+api), "
+             "all (ssh+api+webfig). Default: both",
     )
     parser.add_argument("--ssh-port", type=int, default=22,
                         help="SSH port (default: 22)")
     parser.add_argument("--api-port", type=int, default=8728,
                         help="API port (default: 8728)")
+    parser.add_argument("--webfig-port", type=int, default=80,
+                        help="WebFig HTTP port (default: 80)")
 
     # Credentials
     parser.add_argument(
@@ -144,6 +149,7 @@ def parse_args(argv=None) -> TestConfig:
         protocol=args.protocol,
         ssh_port=args.ssh_port,
         api_port=args.api_port,
+        webfig_port=args.webfig_port,
         threads=args.threads,
         min_delay=args.min_delay,
         slow_mode=args.slow,
