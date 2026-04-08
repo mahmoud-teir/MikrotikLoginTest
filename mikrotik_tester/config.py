@@ -12,8 +12,9 @@ class TestConfig:
     protocol: str = "both"  # "ssh", "api", or "both"
     ssh_port: int = 22
     api_port: int = 8728
-    threads: int = 3
+    threads: int = 1
     slow_mode: bool = False
+    min_delay: float = 1.0  # Minimum delay between attempts (seconds)
     proxy_file: Optional[str] = None
     wordlist: Optional[str] = None
     use_defaults: bool = False
@@ -39,6 +40,8 @@ class TestConfig:
             raise ValueError("API port must be between 1 and 65535")
         if self.timeout < 1:
             raise ValueError("Timeout must be at least 1 second")
+        if self.min_delay < 0:
+            raise ValueError("Minimum delay cannot be negative")
         if not self.wordlist and not self.use_defaults:
             raise ValueError(
                 "Either --wordlist or --use-defaults must be specified"

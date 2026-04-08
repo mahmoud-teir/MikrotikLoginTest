@@ -1,5 +1,8 @@
 """Main orchestrator for MikroTik credential testing.
 
+Integrates adaptive rate limiting to handle MikroTik's bruteforce
+prevention without needing to modify any RouterOS settings.
+
 Usage:
     python -m mikrotik_tester --target 192.168.88.1 --use-defaults --i-am-authorized
 """
@@ -20,6 +23,7 @@ from .cli import BANNER, parse_args
 from .config import TestConfig
 from .logger import AttemptLogger, setup_logging
 from .proxy_manager import ProxyManager
+from .rate_limiter import AdaptiveRateLimiter
 from .reporter import Reporter
 from .ssh_tester import SSHTester
 from .wordlist import WordlistGenerator
@@ -45,6 +49,7 @@ def _test_single(
     ssh_tester: Optional[SSHTester],
     api_tester: Optional[ApiTester],
     proxy_manager: Optional[ProxyManager],
+    rate_limiter: AdaptiveRateLimiter,
     checkpoint: CheckpointManager,
     reporter: Reporter,
     attempt_logger: AttemptLogger,
@@ -63,6 +68,16 @@ def _test_single(
     for proto in protocols:
         if shutdown_event.is_set():
             break
+
+        # Wait for rate limiter before each attempt
+        rate_limiter.wait_before_attempt()
+
+        if shutdown_event.is_set():
+            break
+
+        # Add jitter in slow mode
+        if config.slow_mode:
+            time.sleep(random.uniform(2.0, 6.0))
 
         proxy = None
         proxy_sock = None
@@ -89,6 +104,7 @@ def _test_single(
                         proxy=proxy_display, error=str(e),
                     )
                     reporter.record_attempt(False, error_type="proxy_error")
+                    rate_limiter.report_result("proxy_error")
                     continue
 
         success = False
@@ -116,6 +132,9 @@ def _test_single(
             error_type = "exception"
             logger.debug("Unexpected error testing %s/%s via %s: %s",
                          username, proto, proxy_display or "direct", e)
+
+        # Report to rate limiter (adjusts delays based on response)
+        rate_limiter.report_result(error_type, success=success)
 
         # Log attempt
         attempt_logger.log_attempt(
@@ -178,8 +197,24 @@ def main():
     logger.info("Target: %s", config.target)
     logger.info("Protocol: %s", config.protocol)
     logger.info("Threads: %d", config.threads)
+
+    # Set up adaptive rate limiter
+    base_delay = config.min_delay
     if config.slow_mode:
-        logger.info("Slow-down mode: enabled (2-5s random delays)")
+        base_delay = max(base_delay, 3.0)
+        logger.info("Slow mode: base delay %.1fs + random 2-6s jitter", base_delay)
+    else:
+        logger.info("Base delay: %.1fs (auto-adjusts on blocking)", base_delay)
+
+    rate_limiter = AdaptiveRateLimiter(
+        base_delay=base_delay,
+        slow_mode=config.slow_mode,
+    )
+
+    logger.info(
+        "Adaptive rate limiting: ON — will auto-backoff if router "
+        "blocks us (no RouterOS changes needed)"
+    )
 
     # Set up proxy manager
     proxy_manager = None
@@ -208,7 +243,6 @@ def main():
 
     # Read router config if requested (via --read-config USER PASS)
     if api_tester:
-        # Check for --read-config in sys.argv manually
         if "--read-config" in sys.argv:
             idx = sys.argv.index("--read-config")
             if idx + 2 < len(sys.argv):
@@ -280,21 +314,21 @@ def main():
 
                 username, password = credentials[i]
 
-                # Slow-down mode: delay between submissions
-                if config.slow_mode:
-                    time.sleep(random.uniform(2.0, 5.0))
-
                 future = executor.submit(
                     _test_single,
                     i, username, password, config.protocol, config,
                     ssh_tester, api_tester, proxy_manager,
-                    checkpoint, reporter, attempt_logger,
+                    rate_limiter, checkpoint, reporter, attempt_logger,
                 )
                 futures[future] = i
 
                 # Print progress every 10 attempts
                 if (i - start_index) % 10 == 0 and i > start_index:
                     reporter.print_progress()
+                    # Show rate limiter status
+                    rl_status = rate_limiter.get_status()
+                    if "normal" not in rl_status:
+                        logger.info("Rate limiter: %s", rl_status)
 
             # Collect results
             for future in as_completed(futures):

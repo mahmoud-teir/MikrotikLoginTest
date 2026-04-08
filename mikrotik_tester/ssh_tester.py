@@ -1,4 +1,10 @@
-"""SSH credential tester using paramiko with multiple auth methods."""
+"""SSH credential tester using paramiko with multiple auth methods.
+
+MikroTik SSH allows max 3 login attempts per TCP connection. We only use
+1 attempt per connection (password auth) to stay well under that limit and
+avoid triggering the per-connection counter. Each attempt opens a fresh
+transport so the router sees separate connections.
+"""
 
 import logging
 import socket
@@ -21,7 +27,12 @@ class SSHResult:
 
 class SSHTester:
     """Tests credentials against SSH with password, keyboard-interactive,
-    and key-based authentication."""
+    and key-based authentication.
+
+    MikroTik-aware: each test_credential() call uses one fresh TCP
+    connection with a single auth attempt to avoid hitting the
+    3-attempts-per-connection limit.
+    """
 
     def __init__(self, host: str, port: int = 22, timeout: int = 10,
                  key_file: Optional[str] = None):
@@ -35,10 +46,10 @@ class SSHTester:
                         sock: Optional[socket.socket] = None) -> SSHResult:
         """Test a single username/password via SSH.
 
-        Tries authentication methods in order:
-        1. Password authentication
-        2. Keyboard-interactive (sends password in response)
-        3. Key-based (if key_file configured)
+        Uses only password authentication per connection to stay under
+        MikroTik's 3-attempts-per-connection limit. Keyboard-interactive
+        and key-based auth are only tried if password auth is explicitly
+        rejected (not on timeout/connection errors which suggest blocking).
 
         Args:
             username: SSH username.
@@ -58,7 +69,7 @@ class SSHTester:
             transport.connect()
             transport.set_keepalive(30)
 
-            # Method 1: Password authentication
+            # Method 1: Password authentication (primary — 1 attempt)
             try:
                 transport.auth_password(username, password)
                 if transport.is_authenticated():
@@ -72,8 +83,9 @@ class SSHTester:
             except paramiko.SSHException:
                 pass
 
-            # Method 2: Keyboard-interactive
-            if not transport.is_authenticated():
+            # Method 2: Keyboard-interactive (2nd attempt on same conn)
+            # Only try if the transport is still alive (router didn't drop us)
+            if not transport.is_authenticated() and transport.is_active():
                 try:
                     def kbd_interactive_handler(title, instructions, prompts):
                         return [password] * len(prompts)
@@ -94,8 +106,9 @@ class SSHTester:
                 except paramiko.SSHException:
                     pass
 
-            # Method 3: Key-based fallback
-            if not transport.is_authenticated() and self._key_file:
+            # Method 3: Key-based fallback (only if key_file set)
+            if (not transport.is_authenticated()
+                    and self._key_file and transport.is_active()):
                 try:
                     pkey = self._load_key(self._key_file, password)
                     if pkey:

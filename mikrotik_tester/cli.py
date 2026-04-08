@@ -80,12 +80,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Performance
     parser.add_argument(
-        "--threads", type=int, default=3,
-        help="Number of concurrent threads (default: 3)",
+        "--threads", type=int, default=1,
+        help="Number of concurrent threads (default: 1, safe for MikroTik "
+             "bruteforce prevention)",
+    )
+    parser.add_argument(
+        "--min-delay", type=float, default=1.0,
+        help="Minimum delay between attempts in seconds (default: 1.0). "
+             "Auto-increases when router blocking is detected",
     )
     parser.add_argument(
         "--slow", action="store_true",
-        help="Slow-down mode: random 2-5s delay between attempts",
+        help="Slow-down mode: use 3-7s delays (safer against aggressive "
+             "bruteforce prevention rules)",
     )
     parser.add_argument(
         "--timeout", type=int, default=10,
@@ -138,6 +145,7 @@ def parse_args(argv=None) -> TestConfig:
         ssh_port=args.ssh_port,
         api_port=args.api_port,
         threads=args.threads,
+        min_delay=args.min_delay,
         slow_mode=args.slow,
         proxy_file=args.proxy_file,
         wordlist=args.wordlist,
